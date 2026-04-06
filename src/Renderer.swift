@@ -30,16 +30,20 @@ class Renderer: NSObject, MTKViewDelegate {
         self.commandQueue = queue
 
         let mtlVertexDescriptor = MTLVertexDescriptor()
+        // Attribute 0: Position (float3)
         mtlVertexDescriptor.attributes[0].format = .float3
         mtlVertexDescriptor.attributes[0].offset = 0
         mtlVertexDescriptor.attributes[0].bufferIndex = 0
-        mtlVertexDescriptor.attributes[1].format = .float4
+        // Attribute 1: Normal (float3)
+        mtlVertexDescriptor.attributes[1].format = .float3
         mtlVertexDescriptor.attributes[1].offset = MemoryLayout<Float>.size * 3
         mtlVertexDescriptor.attributes[1].bufferIndex = 0
+        // Attribute 2: TexCoord (float2)
         mtlVertexDescriptor.attributes[2].format = .float2
-        mtlVertexDescriptor.attributes[2].offset = MemoryLayout<Float>.size * 7
+        mtlVertexDescriptor.attributes[2].offset = MemoryLayout<Float>.size * 6
         mtlVertexDescriptor.attributes[2].bufferIndex = 0
-        mtlVertexDescriptor.layouts[0].stride = MemoryLayout<Float>.size * 9
+        // Layout: 3 (position) + 3 (normal) + 2 (texCoord) = 8 floats
+        mtlVertexDescriptor.layouts[0].stride = MemoryLayout<Float>.size * 8
 
         guard let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
               let vertexFunction = library.makeFunction(name: "vertex_main"),
@@ -70,6 +74,8 @@ class Renderer: NSObject, MTKViewDelegate {
         samplerDescriptor.minFilter = .linear
         samplerDescriptor.magFilter = .linear
         samplerDescriptor.mipFilter = .linear
+        samplerDescriptor.sAddressMode = .repeat
+        samplerDescriptor.tAddressMode = .repeat
         self.samplerState = device.makeSamplerState(descriptor: samplerDescriptor)!
 
         super.init()
@@ -81,15 +87,20 @@ class Renderer: NSObject, MTKViewDelegate {
         let textureLoader = MTKTextureLoader(device: device)
         
         let meshDescriptor = MDLVertexDescriptor()
+        // Attribute 0: Position (float3)
         meshDescriptor.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0)
-        meshDescriptor.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeColor, format: .float4, offset: MemoryLayout<Float>.size * 3, bufferIndex: 0)
-        meshDescriptor.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: MemoryLayout<Float>.size * 7, bufferIndex: 0)
-        meshDescriptor.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 9)
+        // Attribute 1: Normal (float3)
+        meshDescriptor.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal, format: .float3, offset: MemoryLayout<Float>.size * 3, bufferIndex: 0)
+        // Attribute 2: TexCoord (float2)
+        meshDescriptor.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: MemoryLayout<Float>.size * 6, bufferIndex: 0)
+        // Layout: 3 + 3 + 2 = 8 floats
+        meshDescriptor.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 8)
         
         var mdlMeshes: [MDLMesh] = []
         
         if let url = url {
             let asset = MDLAsset(url: url, vertexDescriptor: meshDescriptor, bufferAllocator: allocator)
+            asset.loadTextures()
             // Recursively find all meshes in the asset
             func collectMeshes(object: MDLObject) {
                 if let mesh = object as? MDLMesh {
