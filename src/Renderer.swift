@@ -20,6 +20,7 @@ class Renderer: NSObject, MTKViewDelegate {
         let mtkMesh: MTKMesh
         let textures: [MTLTexture?]
         let colors: [simd_float4]
+        let transform: simd_float4x4  // Local transform from USDZ hierarchy
     }
     var renderData: [MeshData] = []
     
@@ -96,31 +97,47 @@ class Renderer: NSObject, MTKViewDelegate {
         // Layout: 3 + 3 + 2 = 8 floats
         meshDescriptor.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 8)
         
-        var mdlMeshes: [MDLMesh] = []
+        var mdlMeshes: [(mesh: MDLMesh, transform: simd_float4x4)] = []
         
         if let url = url {
-            let asset = MDLAsset(url: url, vertexDescriptor: meshDescriptor, bufferAllocator: allocator)
+            // First load without vertex descriptor to preserve original structure
+            let asset = MDLAsset(url: url, vertexDescriptor: nil, bufferAllocator: allocator)
             asset.loadTextures()
-            // Recursively find all meshes in the asset
-            func collectMeshes(object: MDLObject) {
+            
+            print("Loading USDZ from: \(url)")
+            
+            // Recursively find all meshes in the asset and accumulate their transforms
+            func collectMeshes(object: MDLObject, parentTransform: simd_float4x4) {
+                let localTransform = object.transform?.matrix ?? matrix_identity_float4x4
+                let worldTransform = parentTransform * localTransform
+                
                 if let mesh = object as? MDLMesh {
-                    mdlMeshes.append(mesh)
+                    print("Found mesh: \(object.name)")
+                    // Apply vertex descriptor to convert mesh format
+                    mesh.vertexDescriptor = meshDescriptor
+                    mdlMeshes.append((mesh, worldTransform))
                 }
+                
                 for child in object.children.objects {
-                    collectMeshes(object: child)
+                    collectMeshes(object: child, parentTransform: worldTransform)
                 }
             }
-            for object in asset.childObjects(of: MDLObject.self) {
-                collectMeshes(object: object)
+            
+            // Start from the root object (index 0), not all child objects
+            if asset.count > 0 {
+                let rootObject = asset.object(at: 0)
+                collectMeshes(object: rootObject, parentTransform: matrix_identity_float4x4)
             }
+            
+            print("Collected \(mdlMeshes.count) meshes")
         } else {
             let box = MDLMesh.newBox(withDimensions: simd_float3(1, 1, 1), segments: simd_uint3(1, 1, 1), geometryType: .triangles, inwardNormals: false, allocator: allocator)
             box.vertexDescriptor = meshDescriptor
-            mdlMeshes.append(box)
+            mdlMeshes.append((box, matrix_identity_float4x4))
         }
         
         var newRenderData: [MeshData] = []
-        for mdlMesh in mdlMeshes {
+        for (mdlMesh, transform) in mdlMeshes {
             do {
                 let mtkMesh = try MTKMesh(mesh: mdlMesh, device: device)
                 var textures: [MTLTexture?] = []
@@ -159,7 +176,7 @@ class Renderer: NSObject, MTKViewDelegate {
                     textures.append(loadedTexture)
                     colors.append(loadedColor)
                 }
-                newRenderData.append(MeshData(mtkMesh: mtkMesh, textures: textures, colors: colors))
+                newRenderData.append(MeshData(mtkMesh: mtkMesh, textures: textures, colors: colors, transform: transform))
             } catch {
                 print("Failed to create MTKMesh for a model component.")
             }
@@ -177,15 +194,17 @@ class Renderer: NSObject, MTKViewDelegate {
         let aspect = Float(view.drawableSize.width / view.drawableSize.height)
         let projectionMatrix = simd_float4x4.perspective(fovy: Float.pi / 3, aspect: aspect, near: 0.1, far: 100)
         let viewMatrix = camera.viewMatrix()
-        let modelMatrix = simd_float4x4.identity()
-        var uniforms = Uniforms(modelViewProjectionMatrix: projectionMatrix * viewMatrix * modelMatrix)
 
         renderEncoder.setRenderPipelineState(pipelineState)
         renderEncoder.setDepthStencilState(depthStencilState)
         renderEncoder.setFragmentSamplerState(samplerState, index: 0)
-        renderEncoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
         
         for data in renderData {
+            // Apply mesh-specific transform
+            let modelMatrix = data.transform
+            var uniforms = Uniforms(modelViewProjectionMatrix: projectionMatrix * viewMatrix * modelMatrix)
+            renderEncoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.size, index: 1)
+            
             renderEncoder.setVertexBuffer(data.mtkMesh.vertexBuffers[0].buffer, offset: 0, index: 0)
             
             for (idx, submesh) in data.mtkMesh.submeshes.enumerated() {
