@@ -2,4 +2,4 @@
 .build/
 .swiftpm/
 .idea
-src/.idea/
+.pi-lens/

@@ -125,8 +125,26 @@ class Renderer: NSObject, MTKViewDelegate {
             
             // Start from the root object (index 0), not all child objects
             if asset.count > 0 {
+                let bbox = asset.boundingBox
+                let extents = bbox.maxBounds - bbox.minBounds
+                let center = (bbox.maxBounds + bbox.minBounds) / 2.0
+                let maxExtent = max(extents.x, max(extents.y, extents.z))
+                // Scale to fit within a [-1, 1] range (size 2.0)
+                let scale = maxExtent > 0 ? (2.0 / maxExtent) : 1.0
+                
+                var translationMatrix = matrix_identity_float4x4
+                translationMatrix.columns.3 = [-center.x, -center.y, -center.z, 1.0]
+                
+                var scaleMatrix = matrix_identity_float4x4
+                scaleMatrix.columns.0.x = scale
+                scaleMatrix.columns.1.y = scale
+                scaleMatrix.columns.2.z = scale
+                
+                // Normalization is applied first: Translate to origin, then scale.
+                let normalizationTransform = scaleMatrix * translationMatrix
+
                 let rootObject = asset.object(at: 0)
-                collectMeshes(object: rootObject, parentTransform: matrix_identity_float4x4)
+                collectMeshes(object: rootObject, parentTransform: normalizationTransform)
             }
             
             print("Collected \(mdlMeshes.count) meshes")
