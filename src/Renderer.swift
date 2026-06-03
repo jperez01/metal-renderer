@@ -2,11 +2,18 @@ import Metal
 import MetalKit
 import ModelIO
 
+enum RendererError: Error {
+    case noDevice
+    case noCommandQueue
+    case shaderLoadFailed
+    case pipelineCreationFailed(Error)
+}
+
 struct Uniforms {
     var modelViewProjectionMatrix: simd_float4x4
 }
 
-class Renderer: NSObject, MTKViewDelegate {
+@MainActor class Renderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
@@ -24,32 +31,59 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     var renderData: [MeshData] = []
     
-    init?(metalView: MTKView) {
-        guard let device = metalView.device else { return nil }
+    private static func makeVertexDescriptor() -> MTLVertexDescriptor {
+        let d = MTLVertexDescriptor()
+        // Attribute 0: Position (float3)
+        d.attributes[0].format = .float3
+        d.attributes[0].offset = 0
+        d.attributes[0].bufferIndex = 0
+        // Attribute 1: Normal (float3)
+        d.attributes[1].format = .float3
+        d.attributes[1].offset = MemoryLayout<Float>.size * 3
+        d.attributes[1].bufferIndex = 0
+        // Attribute 2: TexCoord (float2)
+        d.attributes[2].format = .float2
+        d.attributes[2].offset = MemoryLayout<Float>.size * 6
+        d.attributes[2].bufferIndex = 0
+        // Layout: 3 (position) + 3 (normal) + 2 (texCoord) = 8 floats
+        d.layouts[0].stride = MemoryLayout<Float>.size * 8
+        return d
+    }
+
+    private static func makeMDLVertexDescriptor() -> MDLVertexDescriptor {
+        let d = MDLVertexDescriptor()
+        // Attribute 0: Position (float3)
+        d.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0)
+        // Attribute 1: Normal (float3)
+        d.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal, format: .float3, offset: MemoryLayout<Float>.size * 3, bufferIndex: 0)
+        // Attribute 2: TexCoord (float2)
+        d.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: MemoryLayout<Float>.size * 6, bufferIndex: 0)
+        // Layout: 3 + 3 + 2 = 8 floats
+        d.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 8)
+        return d
+    }
+
+    init(metalView: MTKView) throws {
+        guard let device = metalView.device else { throw RendererError.noDevice }
         self.device = device
-        guard let queue = device.makeCommandQueue() else { return nil }
+        guard let queue = device.makeCommandQueue() else { throw RendererError.noCommandQueue }
         self.commandQueue = queue
 
-        let mtlVertexDescriptor = MTLVertexDescriptor()
-        // Attribute 0: Position (float3)
-        mtlVertexDescriptor.attributes[0].format = .float3
-        mtlVertexDescriptor.attributes[0].offset = 0
-        mtlVertexDescriptor.attributes[0].bufferIndex = 0
-        // Attribute 1: Normal (float3)
-        mtlVertexDescriptor.attributes[1].format = .float3
-        mtlVertexDescriptor.attributes[1].offset = MemoryLayout<Float>.size * 3
-        mtlVertexDescriptor.attributes[1].bufferIndex = 0
-        // Attribute 2: TexCoord (float2)
-        mtlVertexDescriptor.attributes[2].format = .float2
-        mtlVertexDescriptor.attributes[2].offset = MemoryLayout<Float>.size * 6
-        mtlVertexDescriptor.attributes[2].bufferIndex = 0
-        // Layout: 3 (position) + 3 (normal) + 2 (texCoord) = 8 floats
-        mtlVertexDescriptor.layouts[0].stride = MemoryLayout<Float>.size * 8
+        let mtlVertexDescriptor = Self.makeVertexDescriptor()
 
-        guard let library = try? device.makeDefaultLibrary(bundle: Bundle.module),
-              let vertexFunction = library.makeFunction(name: "vertex_main"),
+        // Xcode compiles .metal → .metallib; SPM copies raw .metal source.
+        let library: MTLLibrary
+        if let compiled = try? device.makeDefaultLibrary(bundle: Bundle.module) {
+            library = compiled
+        } else if let shaderURL = Bundle.module.url(forResource: "Shaders", withExtension: "metal"),
+                  let shaderSource = try? String(contentsOf: shaderURL, encoding: .utf8) {
+            library = try device.makeLibrary(source: shaderSource, options: nil)
+        } else {
+            throw RendererError.shaderLoadFailed
+        }
+        guard let vertexFunction = library.makeFunction(name: "vertex_main"),
               let fragmentFunction = library.makeFunction(name: "fragment_main") else {
-            return nil
+            throw RendererError.shaderLoadFailed
         }
 
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -62,7 +96,7 @@ class Renderer: NSObject, MTKViewDelegate {
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
-            return nil
+            throw RendererError.pipelineCreationFailed(error)
         }
         
         let depthStencilDescriptor = MTLDepthStencilDescriptor()
@@ -87,15 +121,7 @@ class Renderer: NSObject, MTKViewDelegate {
         let allocator = MTKMeshBufferAllocator(device: device)
         let textureLoader = MTKTextureLoader(device: device)
         
-        let meshDescriptor = MDLVertexDescriptor()
-        // Attribute 0: Position (float3)
-        meshDescriptor.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0)
-        // Attribute 1: Normal (float3)
-        meshDescriptor.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal, format: .float3, offset: MemoryLayout<Float>.size * 3, bufferIndex: 0)
-        // Attribute 2: TexCoord (float2)
-        meshDescriptor.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: MemoryLayout<Float>.size * 6, bufferIndex: 0)
-        // Layout: 3 + 3 + 2 = 8 floats
-        meshDescriptor.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 8)
+        let meshDescriptor = Self.makeMDLVertexDescriptor()
         
         var mdlMeshes: [(mesh: MDLMesh, transform: simd_float4x4)] = []
         

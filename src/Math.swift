@@ -1,25 +1,6 @@
 import simd
 
 extension simd_float4x4 {
-    static func identity() -> simd_float4x4 {
-        return matrix_identity_float4x4
-    }
-    
-    static func rotation(radians: Float, axis: simd_float3) -> simd_float4x4 {
-        let unitAxis = normalize(axis)
-        let ct = cosf(radians)
-        let st = sinf(radians)
-        let ci = 1 - ct
-        let x = unitAxis.x, y = unitAxis.y, z = unitAxis.z
-        
-        return simd_float4x4(columns: (
-            simd_float4(ct + x * x * ci,     y * x * ci + z * st, z * x * ci - y * st, 0),
-            simd_float4(x * y * ci - z * st, ct + y * y * ci,     z * y * ci + x * st, 0),
-            simd_float4(x * z * ci + y * st, y * z * ci - x * st, ct + z * z * ci,     0),
-            simd_float4(0,                   0,                   0,                   1)
-        ))
-    }
-    
     static func perspective(fovy: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
         let ys = 1 / tanf(fovy * 0.5)
         let xs = ys / aspect

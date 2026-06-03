@@ -1,5 +1,7 @@
 import simd
+import Observation
 
+@Observable
 class Camera {
     var position: simd_float3 = [0, 0, 5]
     var yaw: Float = -Float.pi / 2 // Pointing towards negative Z
