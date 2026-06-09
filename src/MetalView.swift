@@ -18,6 +18,7 @@ struct MetalView: NSViewRepresentable {
         metalView.device = device
         metalView.clearColor = MTLClearColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0)
         metalView.depthStencilPixelFormat = .depth32Float
+        metalView.framebufferOnly = false
 
         do {
             let renderer = try Renderer(metalView: metalView)
@@ -52,7 +53,12 @@ struct MetalView: NSViewRepresentable {
         func draw(in view: MTKView) {
             guard let renderer else { return }
             inputState.updateCamera(renderer.camera)
-            renderer.draw(in: view)
+            
+            if inputState.useRayTracing {
+                renderer.drawRayTraced(in: view)
+            } else {
+                renderer.draw(in: view)
+            }
         }
     }
 }

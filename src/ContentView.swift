@@ -26,7 +26,7 @@ struct ContentView: View {
             ]
         ) { result in
             if case .success(let url) = result {
-                renderer?.loadModel(url: url)
+                Task { await renderer?.loadModel(url: url)}
             }
         }
     }
@@ -55,9 +55,11 @@ struct ContentView: View {
         Pos: (\(String(format: "%.2f", pos.x)), \(String(format: "%.2f", pos.y)), \(String(format: "%.2f", pos.z)))
         Yaw: \(String(format: "%.2f", yaw))
         Pitch: \(String(format: "%.2f", pitch))
+        Mode: \(inputState.useRayTracing ? "RAY_TRACED" : "RASTERIZED")
 
         [C] Toggle Lock
         [WASD] Move Camera
+        [R] Toggle Ray Tracing
         Move mouse to rotate.
         """)
         .font(.system(.body, design: .monospaced))

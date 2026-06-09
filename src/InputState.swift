@@ -11,6 +11,8 @@ final class InputState {
     // Accumulated mouse deltas between updateCamera calls
     var mouseDeltaX: Float = 0
     var mouseDeltaY: Float = 0
+    
+    var useRayTracing: Bool = false
 
     @ObservationIgnored private var mouseMonitor: Any?
     @ObservationIgnored private var keyDownMonitor: Any?
@@ -39,9 +41,11 @@ final class InputState {
             [weak self] event in
             guard let self else { return event }
             if let chars = event.charactersIgnoringModifiers?.lowercased() {
-                if ["w", "a", "s", "d", "c"].contains(chars) {
+                if ["w", "a", "s", "d", "c", "r"].contains(chars) {
                     if chars == "c" {
                         self.isCameraLocked.toggle()
+                    } else if chars == "r" {
+                        self.useRayTracing.toggle()
                     } else {
                         self.pressedKeys.insert(chars)
                     }

@@ -45,3 +45,4 @@ fragment float4 fragment_main(VertexOut in [[stage_in]],
     float diffuse = max(dot(normalize(in.normal), lightDir), 0.3); // ambient + diffuse
     return float4(float3(0.8, 0.8, 0.8) * diffuse, 1.0);
 }
+
