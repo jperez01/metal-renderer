@@ -43,37 +43,6 @@ struct RayTracingUniforms {
     }
     var renderData: [MeshData] = []
     
-    private static func makeVertexDescriptor() -> MTLVertexDescriptor {
-        let d = MTLVertexDescriptor()
-        // Attribute 0: Position (float3)
-        d.attributes[0].format = .float3
-        d.attributes[0].offset = 0
-        d.attributes[0].bufferIndex = 0
-        // Attribute 1: Normal (float3)
-        d.attributes[1].format = .float3
-        d.attributes[1].offset = MemoryLayout<Float>.size * 3
-        d.attributes[1].bufferIndex = 0
-        // Attribute 2: TexCoord (float2)
-        d.attributes[2].format = .float2
-        d.attributes[2].offset = MemoryLayout<Float>.size * 6
-        d.attributes[2].bufferIndex = 0
-        // Layout: 3 (position) + 3 (normal) + 2 (texCoord) = 8 floats
-        d.layouts[0].stride = MemoryLayout<Float>.size * 8
-        return d
-    }
-
-    nonisolated private static func makeMDLVertexDescriptor() -> MDLVertexDescriptor {
-        let d = MDLVertexDescriptor()
-        // Attribute 0: Position (float3)
-        d.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0)
-        // Attribute 1: Normal (float3)
-        d.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal, format: .float3, offset: MemoryLayout<Float>.size * 3, bufferIndex: 0)
-        // Attribute 2: TexCoord (float2)
-        d.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: MemoryLayout<Float>.size * 6, bufferIndex: 0)
-        // Layout: 3 + 3 + 2 = 8 floats
-        d.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 8)
-        return d
-    }
 
     init(metalView: MTKView) throws {
         guard let device = metalView.device else { throw RendererError.noDevice }
@@ -81,7 +50,7 @@ struct RayTracingUniforms {
         guard let queue = device.makeCommandQueue() else { throw RendererError.noCommandQueue }
         self.commandQueue = queue
 
-        let mtlVertexDescriptor = Self.makeVertexDescriptor()
+        let mtlVertexDescriptor = MTLVertexDescriptor.standard
 
         // Xcode compiles .metal → .metallib; SPM copies raw .metal source.
         let library: MTLLibrary
@@ -137,104 +106,117 @@ struct RayTracingUniforms {
     }
 
 
+
     func loadModel(url: URL? = nil) async {
         let device = self.device
 
         let newRenderData = await Task.detached { () -> [MeshData] in
-            let meshDescriptor = Self.makeMDLVertexDescriptor()
-            let allocator = MTKMeshBufferAllocator(device: device)
+            let mdlMeshes = self.loadMDLMeshes(url: url, device: device)
+
             let textureLoader = MTKTextureLoader(device: device)
-            
-            var mdlMeshes: [(mesh: MDLMesh, transform: simd_float4x4)] = []
-            
-            if let url = url {
-                let asset = MDLAsset(url: url, vertexDescriptor: nil, bufferAllocator: allocator)
-                asset.loadTextures()
-                
-                print("Loading USDZ from: \(url)")
-                
-                func collectMeshes(object: MDLObject, parentTransform: simd_float4x4) {
-                    let localTransform = object.transform?.matrix ?? matrix_identity_float4x4
-                    let worldTransform = parentTransform * localTransform
-                    
-                    if let mesh = object as? MDLMesh {
-                        print("Found mesh: \(object.name)")
-                        mesh.vertexDescriptor = meshDescriptor
-                        mdlMeshes.append((mesh, worldTransform))
-                    }
-                    
-                    for child in object.children.objects {
-                        collectMeshes(object: child, parentTransform: worldTransform)
-                    }
-                }
-                
-                if asset.count > 0 {
-                    let bbox = asset.boundingBox
-                    let extents = bbox.maxBounds - bbox.minBounds
-                    let center = (bbox.maxBounds + bbox.minBounds) / 2.0
-                    let maxExtent = max(extents.x, max(extents.y, extents.z))
-                    let scale = maxExtent > 0 ? (2.0 / maxExtent) : 1.0
-                    
-                    var translationMatrix = matrix_identity_float4x4
-                    translationMatrix.columns.3 = [-center.x, -center.y, -center.z, 1.0]
-                    
-                    var scaleMatrix = matrix_identity_float4x4
-                    scaleMatrix.columns.0.x = scale
-                    scaleMatrix.columns.1.y = scale
-                    scaleMatrix.columns.2.z = scale
-                    
-                    let normalizationTransform = scaleMatrix * translationMatrix
-                    collectMeshes(object: asset.object(at: 0), parentTransform: normalizationTransform)
-                }
-                print("Collected \(mdlMeshes.count) meshes")
-            } else {
-                let box = MDLMesh.newBox(withDimensions: simd_float3(1, 1, 1), segments: simd_uint3(1, 1, 1), geometryType: .triangles, inwardNormals: false, allocator: allocator)
-                box.vertexDescriptor = meshDescriptor
-                mdlMeshes.append((box, matrix_identity_float4x4))
-            }
-            
-            var processedData: [MeshData] = []
-            for (mdlMesh, transform) in mdlMeshes {
-                do {
-                    let mtkMesh = try MTKMesh(mesh: mdlMesh, device: device)
-                    var textures: [MTLTexture?] = []
-                    var colors: [simd_float4] = []
-                    
-                    guard let submeshes = mdlMesh.submeshes as? [MDLSubmesh] else { continue }
-                    
-                    for mdlSubmesh in submeshes {
-                        var loadedTexture: MTLTexture? = nil
-                        var loadedColor: simd_float4 = [1, 1, 1, 1]
-                        
-                        if let material = mdlSubmesh.material, let baseColorProperty = material.property(with: .baseColor) {
-                            if let textureSampler = baseColorProperty.textureSamplerValue,
-                               let mdlTexture = textureSampler.texture {
-                                loadedTexture = try? textureLoader.newTexture(texture: mdlTexture, options: [.generateMipmaps: true, .SRGB: true])
-                            }
-                            if loadedTexture == nil, let textureUrl = baseColorProperty.urlValue {
-                                loadedTexture = try? textureLoader.newTexture(URL: textureUrl, options: [.generateMipmaps: true, .SRGB: true])
-                            }
-                            if baseColorProperty.type == .float4 {
-                                loadedColor = baseColorProperty.float4Value
-                            } else if baseColorProperty.type == .float3 {
-                                let v3 = baseColorProperty.float3Value
-                                loadedColor = [v3.x, v3.y, v3.z, 1.0]
-                            }
-                        }
-                        textures.append(loadedTexture)
-                        colors.append(loadedColor)
-                    }
-                    processedData.append(MeshData(mtkMesh: mtkMesh, textures: textures, colors: colors, transform: transform))
-                } catch {
-                    print("Failed to create MTKMesh for a model component.")
-                }
-            }
-            return processedData
+            return self.processMeshResources(device: device, textureLoader: textureLoader, mdlMeshes: mdlMeshes)
         }.value
-        
+
+        // 3. Update the UI / rendering state
         self.renderData = newRenderData
         self.buildAccelerationStructures()
     }
+    
+    nonisolated private func loadMDLMeshes(url: URL?, device: MTLDevice) -> [(mesh: MDLMesh, transform: simd_float4x4)] {
+        let allocator = MTKMeshBufferAllocator(device: device)
+        let meshDescriptor = MDLVertexDescriptor.standard
+        
+        var mdlMeshes: [(mesh: MDLMesh, transform: simd_float4x4)] = []
+        
+        if let url = url {
+            let asset = MDLAsset(url: url, vertexDescriptor: nil, bufferAllocator: allocator)
+            asset.loadTextures()
+            
+            print("Loading USDZ from: \(url)")
+            
+            func collectMeshes(object: MDLObject, parentTransform: simd_float4x4) {
+                let localTransform = object.transform?.matrix ?? matrix_identity_float4x4
+                let worldTransform = parentTransform * localTransform
+                
+                if let mesh = object as? MDLMesh {
+                    print("Found mesh: \(object.name)")
+                    mesh.vertexDescriptor = meshDescriptor
+                    mdlMeshes.append((mesh, worldTransform))
+                }
+                
+                for child in object.children.objects {
+                    collectMeshes(object: child, parentTransform: worldTransform)
+                }
+            }
+            
+            if asset.count > 0 {
+                let bbox = asset.boundingBox
+                let extents = bbox.maxBounds - bbox.minBounds
+                let center = (bbox.maxBounds + bbox.minBounds) / 2.0
+                let maxExtent = max(extents.x, max(extents.y, extents.z))
+                let scale = maxExtent > 0 ? (2.0 / maxExtent) : 1.0
+                
+                var translationMatrix = matrix_identity_float4x4
+                translationMatrix.columns.3 = [-center.x, -center.y, -center.z, 1.0]
+                
+                var scaleMatrix = matrix_identity_float4x4
+                scaleMatrix.columns.0.x = scale
+                scaleMatrix.columns.1.y = scale
+                scaleMatrix.columns.2.z = scale
+                
+                let normalizationTransform = scaleMatrix * translationMatrix
+                collectMeshes(object: asset.object(at: 0), parentTransform: normalizationTransform)
+            }
+            print("Collected \(mdlMeshes.count) meshes")
+        } else {
+            let box = MDLMesh.newBox(withDimensions: simd_float3(1, 1, 1), segments: simd_uint3(1, 1, 1), geometryType: .triangles, inwardNormals: false, allocator: allocator)
+            box.vertexDescriptor = meshDescriptor
+            mdlMeshes.append((box, matrix_identity_float4x4))
+        }
+        
+        return mdlMeshes
+    }
+    
+    nonisolated func processMeshResources(device: MTLDevice, textureLoader: MTKTextureLoader, mdlMeshes: [(mesh: MDLMesh, transform: simd_float4x4)]) -> [MeshData] {
+        var processedData: [MeshData] = []
+        for (mdlMesh, transform) in mdlMeshes {
+            do {
+                let mtkMesh = try MTKMesh(mesh: mdlMesh, device: device)
+                var textures: [MTLTexture?] = []
+                var colors: [simd_float4] = []
+                
+                guard let submeshes = mdlMesh.submeshes as? [MDLSubmesh] else { continue }
+                
+                for mdlSubmesh in submeshes {
+                    var loadedTexture: MTLTexture? = nil
+                    var loadedColor: simd_float4 = [1, 1, 1, 1]
+                    
+                    if let material = mdlSubmesh.material, let baseColorProperty = material.property(with: .baseColor) {
+                        if let textureSampler = baseColorProperty.textureSamplerValue,
+                           let mdlTexture = textureSampler.texture {
+                            loadedTexture = try? textureLoader.newTexture(texture: mdlTexture, options: [.generateMipmaps: true, .SRGB: true])
+                        }
+                        if loadedTexture == nil, let textureUrl = baseColorProperty.urlValue {
+                            loadedTexture = try? textureLoader.newTexture(URL: textureUrl, options: [.generateMipmaps: true, .SRGB: true])
+                        }
+                        if baseColorProperty.type == .float4 {
+                            loadedColor = baseColorProperty.float4Value
+                        } else if baseColorProperty.type == .float3 {
+                            let v3 = baseColorProperty.float3Value
+                            loadedColor = [v3.x, v3.y, v3.z, 1.0]
+                        }
+                    }
+                    textures.append(loadedTexture)
+                    colors.append(loadedColor)
+                }
+                processedData.append(MeshData(mtkMesh: mtkMesh, textures: textures, colors: colors, transform: transform))
+            } catch {
+                print("Failed to create MTKMesh for a model component.")
+            }
+        }
+        return processedData
+    }
+    
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
@@ -418,5 +400,41 @@ struct RayTracingUniforms {
         
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+}
+
+extension MTLVertexDescriptor {
+    static var standard: MTLVertexDescriptor {
+        let d = MTLVertexDescriptor()
+        // Attribute 0: Position (float3)
+        d.attributes[0].format = .float3
+        d.attributes[0].offset = 0
+        d.attributes[0].bufferIndex = 0
+        // Attribute 1: Normal (float3)
+        d.attributes[1].format = .float3
+        d.attributes[1].offset = MemoryLayout<Float>.size * 3
+        d.attributes[1].bufferIndex = 0
+        // Attribute 2: TexCoord (float2)
+        d.attributes[2].format = .float2
+        d.attributes[2].offset = MemoryLayout<Float>.size * 6
+        d.attributes[2].bufferIndex = 0
+        // Layout: 3 (position) + 3 (normal) + 2 (texCoord) = 8 floats
+        d.layouts[0].stride = MemoryLayout<Float>.size * 8
+        return d
+    }
+}
+
+extension MDLVertexDescriptor {
+    static var standard: MDLVertexDescriptor {
+        let d = MDLVertexDescriptor()
+        // Attribute 0: Position (float3)
+        d.attributes[0] = MDLVertexAttribute(name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0)
+        // Attribute 1: Normal (float3)
+        d.attributes[1] = MDLVertexAttribute(name: MDLVertexAttributeNormal, format: .float3, offset: MemoryLayout<Float>.size * 3, bufferIndex: 0)
+        // Attribute 2: TexCoord (float2)
+        d.attributes[2] = MDLVertexAttribute(name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: MemoryLayout<Float>.size * 6, bufferIndex: 0)
+        // Layout: 3 + 3 + 2 = 8 floats
+        d.layouts[0] = MDLVertexBufferLayout(stride: MemoryLayout<Float>.size * 8)
+        return d
     }
 }
