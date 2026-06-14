@@ -105,8 +105,6 @@ struct RayTracingUniforms {
         Task { await loadModel()}
     }
 
-
-
     func loadModel(url: URL? = nil) async {
         let device = self.device
 
