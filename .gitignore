@@ -3,3 +3,4 @@
 .swiftpm/
 .idea
 .pi-lens/
+.clangd

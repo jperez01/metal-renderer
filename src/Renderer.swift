@@ -13,20 +13,36 @@ struct Uniforms {
     var modelViewProjectionMatrix: simd_float4x4
 }
 
+
+struct Light {
+    var position: simd_float3
+    var color: simd_float3
+}
+
 struct RayTracingUniforms {
     var inverseViewProjectionMatrix: simd_float4x4
     var cameraPosition: simd_float4
     var width: UInt32
     var height: UInt32
+    var lights: (Light, Light, Light, Light)
+}
+
+@Observable
+final class SceneLighting {
+    var lightPosition: simd_float3 = [0, 5, 0]
+    var lightColor: simd_float3 = [1, 1, 1]
 }
 
 @MainActor class Renderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
+
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
     let depthStencilState: MTLDepthStencilState
     let samplerState: MTLSamplerState
     
+    // Lighting State
+    let sceneLighting = SceneLighting()
     // Ray Tracing Properties
     private var rayTracePipelineState: MTLComputePipelineState?
     private var instanceAccelerationStructure: MTLAccelerationStructure?
@@ -373,7 +389,16 @@ struct RayTracingUniforms {
         let view = camera.viewMatrix()
         let vp = projection * view
         
-        var uniforms = RayTracingUniforms(inverseViewProjectionMatrix: simd_inverse(vp), cameraPosition: simd_float4(camera.position, 0), width: UInt32(width), height: UInt32(height))
+
+        let light = Light(position: sceneLighting.lightPosition, color: sceneLighting.lightColor)
+        let defaultLight = Light(position: [0,0,0], color: [0,0,0])
+        var uniforms = RayTracingUniforms(
+            inverseViewProjectionMatrix: simd_inverse(vp), 
+            cameraPosition: simd_float4(camera.position, 0), 
+            width: UInt32(width), 
+            height: UInt32(height),
+            lights: (light, defaultLight, defaultLight, defaultLight)
+        )
         
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(pipeline)

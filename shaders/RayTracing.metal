@@ -10,11 +10,17 @@
 using namespace metal;
 using namespace raytracing;
 
+struct Light {
+    float3 position;
+    float3 color;
+};
+
 struct RayTraceUniforms {
     float4x4 inverseViewProjection;
     float4 cameraPosition;
     uint width;
     uint height;
+    Light lights[4];
 };
 
 kernel void raytrace_kernel(
@@ -43,12 +49,25 @@ kernel void raytrace_kernel(
     auto hit = inter.intersect(r, scene);
     
     float4 color;
-    if (hit.type == intersection_type::triangle) {
-        float t = hit.distance;
-        float shade = 1.0 / (1.0 + t * 0.3);
-        color = float4(shade, shade, shade, 1.0);
+
+    auto light = uniforms.lights[0];
+    ray shadowRay;
+    shadowRay.origin = r.origin + r.direction * hit.distance; // Offset to avoid self-intersection
+    shadowRay.direction = normalize(light.position - shadowRay.origin);
+    shadowRay.min_distance = 0.001;
+    shadowRay.max_distance = length(light.position - shadowRay.origin);
+    auto shadowHit = inter.intersect(shadowRay, scene);
+
+    if (shadowHit.type == intersection_type::triangle) {
+        color = float4(0.05, 0.05, 0.05, 1.0); // In shadow
     } else {
-        color = float4(0.1, 0.1, 0.1, 1.0);
+        if (hit.type == intersection_type::triangle) {
+            float t = hit.distance;
+            float shade = 1.0 / (1.0 + t * 0.3);
+            color = float4(shade, shade, shade, 1.0);
+        } else {
+            color = float4(0.1, 0.1, 0.1, 1.0);
+        }
     }
     
     output.write(color, tid);
